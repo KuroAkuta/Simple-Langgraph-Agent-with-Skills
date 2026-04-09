@@ -13,6 +13,7 @@ Simple_agent_web/
 ├── backend/
 │   ├── main.py                 # FastAPI 入口，负责路由注册
 │   ├── tools.py                # 工具定义
+│   ├── IDENTITY.md             # Agent 人设配置文件
 │   ├── requirements.txt        # Python 依赖
 │   ├── .env                    # 环境配置
 │   ├── config/
