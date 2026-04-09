@@ -1,6 +1,9 @@
 # Simple Agent Web
 
 前后端分离的 Web 版本 Simple Agent，支持流式传输。
+![alt text](image.png)
+![alt text](image-1.png)
+![alt text](image-2.png)
 
 ## 项目结构
 
