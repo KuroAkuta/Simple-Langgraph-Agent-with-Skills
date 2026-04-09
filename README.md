@@ -92,7 +92,7 @@ python -m http.server 3000
 | `/api/tool_confirm` | POST | 确认或拒绝待执行工具 |
 
 ## 功能特性
-
+- ✅ 人设自定义 - 通过 `backend/IDENTITY.md` 自定义 Agent 人设
 - ✅ 流式传输 (Server-Sent Events)
 - ✅ 多会话管理
 - ✅ 工具调用可视化与人工审查

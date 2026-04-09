@@ -22,14 +22,26 @@ def get_system_prompt() -> str:
     skills_dir = str(settings.SKILLS_DIR)
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Read identity from IDENTITY.md
+    identity_file = settings.BACKEND_DIR / "IDENTITY.md"
+    if identity_file.exists():
+        identity_content = identity_file.read_text(encoding="utf-8")
+    else:
+        identity_content = ""
+
     return SYSTEM_PROMPT.format(
         working_dir=working_dir,
         skills_dir=skills_dir,
-        current_time=current_time
+        current_time=current_time,
+        identity=identity_content
     )
 
 
-SYSTEM_PROMPT = """You are Simple Agent, a helpful AI assistant with the ability to:
+SYSTEM_PROMPT = """{identity}
+
+---
+
+You are Simple Agent, a helpful AI assistant with the ability to:
 
 1. **Execute local commands** - Use `run_command` to run shell commands
 2. **File operations** - Read, write, list, and search files
