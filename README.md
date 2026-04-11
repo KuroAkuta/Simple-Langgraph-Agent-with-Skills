@@ -15,12 +15,14 @@
 Simple_agent_web/
 ├── backend/
 │   ├── main.py                 # FastAPI 入口，负责路由注册
-│   ├── tools.py                # 工具定义
 │   ├── IDENTITY.md             # Agent 人设配置文件
 │   ├── requirements.txt        # Python 依赖
 │   ├── .env                    # 环境配置
 │   ├── config/
 │   │   └── settings.py         # 配置管理
+│   ├── tools/
+│   │   ├── basic_tools.py         # 基础工具（命令行、skills等）
+│   │   └── memory_tools.py        # 长期记忆工具  
 │   ├── models/
 │   │   ├── state.py            # AgentState 和类型定义
 │   │   └── schemas.py          # Pydantic 请求/响应模型
@@ -106,11 +108,12 @@ python -m http.server 3000
 - ✅ 人设自定义 - 通过 `backend/IDENTITY.md` 自定义 Agent 人设
 - ✅ 流式传输 (Server-Sent Events)
 - ✅ 多会话管理
-- ✅ 工具调用可视化与人工审查
+- ✅ 工具调用可视化与人工审查（Human-In-The-Loop）
 - ✅ **Skill支持**（./backend/.agents/skills）
 - ✅ **命令行运行**
 - ✅ 个人知识库、RAG检索、重排序
 - ✅ 多格式文档支持 - 支持 PDF、Word、Excel、PPT、Markdown 等常见格式自动解析
+- ✅ 长期记忆 - 记录用户信息、偏好，以及用户想要agent记住的
 
 ## 防护机制：
 
