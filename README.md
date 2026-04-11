@@ -5,6 +5,7 @@
 ![alt text](image-1.png)
 ![alt text](image-2.png)
 ![alt text](image-3.png)
+![alt text](image-4.png)
 
 ## 项目结构
 
@@ -107,6 +108,7 @@ python -m http.server 3000
 - ✅ **Skill支持**（./backend/.agents/skills）
 - ✅ **命令行运行**
 - ✅ 个人知识库、RAG检索、重排序
+- ✅ 多格式文档支持 - 支持 PDF、Word、Excel、PPT、Markdown 等常见格式自动解析
 
 ## 防护机制：
 

@@ -23,22 +23,36 @@ class DashScopeEmbeddings:
     def __init__(self, model: str, api_key: str):
         self.model = model
         self.api_key = api_key
+        # DashScope limits batch size to 10
+        self.batch_size = 10
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for documents."""
+        """Generate embeddings for documents.
+
+        DashScope API limits batch size to 10, so we process in batches.
+        """
         import dashscope
         from http import HTTPStatus
 
-        resp = dashscope.TextEmbedding.call(
-            model=self.model,
-            input=texts,
-            api_key=self.api_key
-        )
+        all_embeddings = []
 
-        if resp.status_code == HTTPStatus.OK:
-            return [item["embedding"] for item in resp.output["embeddings"]]
-        else:
-            raise Exception(f"DashScope error: {resp.code} - {resp.message}")
+        # Process in batches to avoid exceeding the limit
+        for i in range(0, len(texts), self.batch_size):
+            batch_texts = texts[i:i + self.batch_size]
+
+            resp = dashscope.TextEmbedding.call(
+                model=self.model,
+                input=batch_texts,
+                api_key=self.api_key
+            )
+
+            if resp.status_code == HTTPStatus.OK:
+                batch_embeddings = [item["embedding"] for item in resp.output["embeddings"]]
+                all_embeddings.extend(batch_embeddings)
+            else:
+                raise Exception(f"DashScope error: {resp.code} - {resp.message}")
+
+        return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
         """Generate embedding for a query."""
@@ -108,6 +122,13 @@ class DocumentIndexer:
         """
         Read content from a document file.
 
+        Supports multiple formats:
+        - Plain text: .txt, .md, .csv, .json, .py, .js, etc.
+        - PDF: .pdf (using markitdown)
+        - Word: .doc, .docx (using markitdown)
+        - PowerPoint: .ppt, .pptx (using markitdown)
+        - Excel: .xls, .xlsx (using markitdown)
+
         Args:
             file_path: Path to the document file
             filename: Original filename (for format detection)
@@ -115,24 +136,60 @@ class DocumentIndexer:
         Returns:
             Document content as text
         """
-        suffix = filename.lower().split(".")[-1]
+        suffix = Path(filename).suffix.lower()
 
-        # Try different encodings
-        encodings = ["utf-8", "gbk", "latin-1"]
+        # Supported document formats for markitdown conversion
+        document_formats = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"}
 
-        for encoding in encodings:
+        # Plain text formats - read directly
+        text_formats = {
+            ".txt", ".md", ".csv", ".json", ".py", ".js", ".ts",
+            ".jsx", ".tsx", ".yaml", ".yml", ".toml", ".ini",
+            ".cfg", ".conf", ".log", ".xml", ".html", ".htm",
+        }
+
+        if suffix in text_formats:
+            # Read plain text files with encoding fallback
+            encodings = ["utf-8", "gbk", "latin-1"]
+            for encoding in encodings:
+                try:
+                    content = file_path.read_text(encoding=encoding)
+                    return content
+                except UnicodeDecodeError:
+                    continue
+
+            # If all text encodings fail, try reading as binary and decode
             try:
-                content = file_path.read_text(encoding=encoding)
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                return content
+            except Exception as e:
+                raise ValueError(f"Cannot read file {filename}: {e}")
+
+        elif suffix in document_formats:
+            # Use markitdown for document files
+            try:
+                from markitdown import MarkItDown
+                md = MarkItDown()
+                result = md.convert(str(file_path))
+                return result.text_content
+            except ImportError:
+                raise ValueError(
+                    f"markitdown library not installed. "
+                    f"Please install it to support {suffix} files: pip install markitdown"
+                )
+            except Exception as e:
+                raise ValueError(f"Cannot parse {suffix} file {filename}: {e}")
+
+        else:
+            # Unknown format - try to read as plain text
+            try:
+                content = file_path.read_text(encoding="utf-8")
                 return content
             except UnicodeDecodeError:
-                continue
-
-        # If all text encodings fail, try reading as binary and decode
-        try:
-            content = file_path.read_text(encoding="utf-8", errors="replace")
-            return content
-        except Exception as e:
-            raise ValueError(f"Cannot read file {filename}: {e}")
+                raise ValueError(
+                    f"Unsupported file format: {suffix}. "
+                    f"Supported formats: {', '.join(sorted(document_formats | text_formats))}"
+                )
 
     def index_documents(
         self,
