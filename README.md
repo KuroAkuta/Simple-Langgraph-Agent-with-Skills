@@ -63,6 +63,10 @@ Simple_agent_web/
 
 ## 快速启动
 
+模型配置等：backend\\.env 
+
+embedding、reranker推荐使用dashscope，其他模型兼容性未知
+
 ### 1. 启动后端
 
 ```bash
@@ -122,15 +126,15 @@ python -m http.server 3000
 - ✅ **命令行运行**
 - ✅ 个人知识库、RAG检索、重排序
 - ✅ 多格式文档支持 - 支持 PDF、Word、Excel、PPT、Markdown 等常见格式自动解析
-- ✅ 长期记忆 - 记录用户信息、偏好，以及用户想要agent记住的
+- ✅ 长期记忆 - 主动记录用户信息、偏好，以及用户想要agent记住的
 - ✅ **子Agent / 后台子Agent 任务动态创建 支持多线程并行运行**
 
 ## 防护机制：
-
+主要工具限制在backend\\workspace目录下。
 - 目录遍历阻止 - 拦截 .. 路径
 - 绝对路径阻止 - 拦截 /etc/, C:\ 等系统路径
 - 危险命令阻止 - 拦截：
-- 系统破坏：rm -rf /, format, diskpart
+- 系统破坏：rm -rf /, diskpart
 - 权限提升：sudo, su, chmod 777
 - 数据泄露：base64, xxd
 - 读命令路径检查 - 对 cat, type, head, tail, grep 等命令，检查其参数是否包含绝对路径或 ..，如果是则拒绝
