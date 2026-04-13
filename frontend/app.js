@@ -52,7 +52,10 @@ function initSubagentFloatDragOnElement(floatEl) {
     const header = floatEl.querySelector('.subagent-float-header');
     if (!header) return;
 
+    let hasDragged = false; // 记录是否发生了拖动
+
     header.addEventListener('mousedown', (e) => {
+        hasDragged = false;
         const dragState = {
             isDragging: true,
             offsetX: e.clientX - floatEl.getBoundingClientRect().left,
@@ -62,6 +65,7 @@ function initSubagentFloatDragOnElement(floatEl) {
 
         const mouseMoveHandler = (e) => {
             if (dragState.isDragging) {
+                hasDragged = true; // 标记发生了拖动
                 const el = dragState.element;
                 el.style.left = (e.clientX - dragState.offsetX) + 'px';
                 el.style.top = (e.clientY - dragState.offsetY) + 'px';
@@ -74,6 +78,13 @@ function initSubagentFloatDragOnElement(floatEl) {
             dragState.isDragging = false;
             document.removeEventListener('mousemove', mouseMoveHandler);
             document.removeEventListener('mouseup', mouseUpHandler);
+            // 鼠标释放后，检查是否有拖动，如果没有则触发折叠
+            setTimeout(() => {
+                if (!hasDragged) {
+                    floatEl.classList.toggle('collapsed');
+                }
+                hasDragged = false; // 重置标记
+            }, 0);
         };
 
         document.addEventListener('mousemove', mouseMoveHandler);
@@ -1492,7 +1503,7 @@ function showSubagentFloat(taskId, taskDescription, subagentType) {
     floatEl.style.display = 'block';
 
     floatEl.innerHTML = `
-        <div class="subagent-float-header" onclick="toggleSubagentFloat('${taskId}')" style="cursor: pointer;">
+        <div class="subagent-float-header" style="cursor: pointer;">
             <div class="subagent-float-title">
                 <span class="status-dot running"></span>
                 <span class="subagent-float-main-title">子 agent 运行中</span>
