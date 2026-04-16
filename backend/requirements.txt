@@ -16,3 +16,7 @@ aiofiles>=23.0.0
 
 # Document conversion (PDF, Word, Excel, PPT)
 markitdown>=0.0.1a2
+
+# Hybrid retrieval (BM25 + Chinese tokenization)
+rank-bm25>=0.2.2
+jieba>=0.42.1

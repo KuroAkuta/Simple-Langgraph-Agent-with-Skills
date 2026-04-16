@@ -2,6 +2,8 @@
 Document Indexer service for chunking and vectorizing documents.
 """
 import os
+import json
+import pickle
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from http import HTTPStatus
@@ -98,6 +100,10 @@ class DocumentIndexer:
             separators=["\n\n", "\n", "。", "!", "!", "......", ".", " ", ""],
         )
 
+        # BM25 index storage directory
+        self.bm25_dir = Path(__file__).parent.parent / "storage" / "bm25"
+        self.bm25_dir.mkdir(parents=True, exist_ok=True)
+
     def _get_vectorstore(self, kb_id: str) -> Chroma:
         """
         Get or create a vector store for a knowledge base.
@@ -115,6 +121,75 @@ class DocumentIndexer:
             collection_name=collection_name,
             persist_directory=str(self.persist_dir),
         )
+
+    def _get_bm25_index_path(self, kb_id: str) -> Path:
+        """Get the file path for BM25 index of a knowledge base."""
+        return self.bm25_dir / f"kb_{kb_id}_bm25.pkl"
+
+    def _load_bm25_index(self, kb_id: str):
+        """
+        Load BM25 index for a knowledge base.
+
+        Returns:
+            BM25 index object or None if not exists
+        """
+        index_path = self._get_bm25_index_path(kb_id)
+        if index_path.exists():
+            try:
+                with open(index_path, "rb") as f:
+                    return pickle.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load BM25 index for {kb_id}: {e}")
+        return None
+
+    def _save_bm25_index(self, kb_id: str, bm25_index):
+        """Save BM25 index for a knowledge base."""
+        index_path = self._get_bm25_index_path(kb_id)
+        with open(index_path, "wb") as f:
+            pickle.dump(bm25_index, f)
+
+    def _load_bm25_corpus(self, kb_id: str) -> List[dict]:
+        """
+        Load BM25 corpus (list of documents with metadata) for a knowledge base.
+        Filters out any invalid entries that lack proper metadata.
+
+        Returns:
+            List of dicts with 'text' and 'metadata' fields, or empty list if not exists
+        """
+        corpus_path = self.bm25_dir / f"kb_{kb_id}_corpus.json"
+        if corpus_path.exists():
+            try:
+                with open(corpus_path, "r", encoding="utf-8") as f:
+                    raw_data = json.load(f)
+                    # Filter out invalid entries (must have 'text' and 'metadata')
+                    return [
+                        item for item in raw_data
+                        if isinstance(item, dict) and "text" in item and "metadata" in item
+                    ]
+            except Exception as e:
+                print(f"Warning: Failed to load BM25 corpus for {kb_id}: {e}")
+        return []
+
+    def _save_bm25_corpus(self, kb_id: str, corpus: List[dict]):
+        """Save BM25 corpus for a knowledge base."""
+        corpus_path = self.bm25_dir / f"kb_{kb_id}_corpus.json"
+        with open(corpus_path, "w", encoding="utf-8") as f:
+            json.dump(corpus, f, ensure_ascii=False, indent=2)
+
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        Tokenize text for BM25.
+
+        Uses jieba for Chinese tokenization.
+        """
+        try:
+            import jieba
+            # Use cut for precise mode
+            return list(jieba.cut(text))
+        except ImportError:
+            # Fallback: simple split by whitespace and punctuation
+            import re
+            return re.findall(r'\w+', text)
 
     def _read_document_content(
         self, file_path: Path, filename: str
@@ -221,11 +296,20 @@ class DocumentIndexer:
             chunk_tracker = ChunkTracker(kb_id, str(self.persist_dir.parent / "knowledge"))
             chunk_tracker.clear()
 
+            # Clear BM25 corpus and index
+            bm25_corpus = []
+            bm25_index = None
+        else:
+            # Incremental mode: load existing BM25 corpus
+            bm25_corpus = self._load_bm25_corpus(kb_id)
+            bm25_index = self._load_bm25_index(kb_id)
+
         chunk_tracker = ChunkTracker(kb_id, str(self.persist_dir.parent / "knowledge"))
         vectorstore = self._get_vectorstore(kb_id)
 
         total_new_chunks = 0
         total_chunks = 0
+        new_bm25_docs = []  # Track new chunks for BM25
 
         for doc in documents:
             # Skip only successfully indexed documents in incremental mode
@@ -238,6 +322,27 @@ class DocumentIndexer:
                         content = self._read_document_content(doc_path, doc.filename)
                         temp_chunks = self.text_splitter.split_text(content)
                         total_chunks += len(temp_chunks)
+
+                        # Check if BM25 corpus is missing this document's chunks
+                        # If so, add them to ensure consistency
+                        existing_bm25_doc_ids = {
+                            item["metadata"]["doc_id"]
+                            for item in bm25_corpus
+                            if "metadata" in item and "doc_id" in item["metadata"]
+                        }
+                        if doc.id not in existing_bm25_doc_ids:
+                            # BM25 corpus is missing this document, add chunks to new_bm25_docs
+                            # so they get saved and indexed at the end of this function
+                            for i, chunk_text in enumerate(temp_chunks):
+                                new_bm25_docs.append({
+                                    "text": chunk_text,
+                                    "metadata": {
+                                        "doc_id": doc.id,
+                                        "doc_name": doc.filename,
+                                        "chunk_idx": i,
+                                        "kb_id": kb_id,
+                                    }
+                                })
                     except Exception:
                         pass
                 continue
@@ -292,6 +397,18 @@ class DocumentIndexer:
 
                     total_new_chunks += len(new_chunk_docs)
 
+                    # Add new chunks to BM25 corpus with full metadata
+                    for chunk_doc in new_chunk_docs:
+                        new_bm25_docs.append({
+                            "text": chunk_doc.page_content,
+                            "metadata": {
+                                "doc_id": chunk_doc.metadata.get("doc_id", ""),
+                                "doc_name": chunk_doc.metadata.get("doc_name", ""),
+                                "chunk_idx": chunk_doc.metadata.get("chunk_idx", 0),
+                                "kb_id": chunk_doc.metadata.get("kb_id", ""),
+                            }
+                        })
+
                 # Update document status
                 knowledge_manager.update_document_status(
                     kb_id,
@@ -316,6 +433,22 @@ class DocumentIndexer:
         if kb := knowledge_manager.get_knowledge_base(kb_id):
             kb.total_chunks = total_chunks
             knowledge_manager._save_metadata()
+
+        # Build and save BM25 index if there are new chunks
+        if new_bm25_docs:
+            # Add new chunks to corpus
+            bm25_corpus.extend(new_bm25_docs)
+            self._save_bm25_corpus(kb_id, bm25_corpus)
+
+            # Rebuild BM25 index
+            try:
+                from rank_bm25 import BM25Okapi
+                # Tokenize texts from corpus with metadata
+                tokenized_corpus = [self._tokenize(doc["text"]) for doc in bm25_corpus]
+                bm25_index = BM25Okapi(tokenized_corpus)
+                self._save_bm25_index(kb_id, bm25_index)
+            except ImportError:
+                print("Warning: rank-bm25 not installed, BM25 retrieval disabled")
 
         return (total_chunks, total_new_chunks)
 
@@ -348,6 +481,7 @@ class DocumentIndexer:
         k: int = 3,
         use_rerank: bool = False,
         top_n: int = 3,
+        use_hybrid: bool = True,
     ) -> List[Document]:
         """
         Search for relevant chunks in a knowledge base.
@@ -358,15 +492,30 @@ class DocumentIndexer:
             k: Number of results to retrieve initially
             use_rerank: Whether to use reranker for better results
             top_n: Number of final results after reranking
+            use_hybrid: Whether to use hybrid retrieval (vector + BM25)
 
         Returns:
             List of relevant Document objects
         """
         vectorstore = self._get_vectorstore(kb_id)
 
-        # Get more results for reranking
+        # Get more results for better fusion
         retrieve_k = k * 3 if use_rerank else k
-        results = vectorstore.similarity_search(query, k=retrieve_k)
+
+        # Vector search
+        vector_results = vectorstore.similarity_search(query, k=retrieve_k)
+
+        # BM25 search (hybrid retrieval)
+        bm25_results = []
+        if use_hybrid:
+            bm25_results = self._bm25_search(kb_id, query, k=retrieve_k)
+
+        # Combine results using RRF (Reciprocal Rank Fusion)
+        # Note: Do NOT pass retrieve_k as rrf_k - use default rrf_k=60
+        if use_hybrid and bm25_results:
+            results = self._rrf_fusion(vector_results, bm25_results)
+        else:
+            results = vector_results
 
         if use_rerank and results and settings.RERANKER_MODEL:
             try:
@@ -392,6 +541,119 @@ class DocumentIndexer:
 
         return results[:k]
 
+    def _bm25_search(self, kb_id: str, query: str, k: int = 10) -> List[Document]:
+        """
+        Search using BM25.
+
+        Args:
+            kb_id: Knowledge base identifier
+            query: Search query
+            k: Number of results to retrieve
+
+        Returns:
+            List of Document objects ranked by BM25 score with full metadata
+        """
+        bm25_index = self._load_bm25_index(kb_id)
+        if bm25_index is None:
+            return []
+
+        bm25_corpus = self._load_bm25_corpus(kb_id)
+        if not bm25_corpus:
+            return []
+
+        # Tokenize query
+        tokenized_query = self._tokenize(query)
+
+        # Get BM25 scores
+        scores = bm25_index.get_scores(tokenized_query)
+
+        # Get top-k indices
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+
+        # Build Document objects with full metadata
+        results = []
+        for idx in top_indices:
+            if scores[idx] > 0:  # Only include documents with positive scores
+                doc_data = bm25_corpus[idx]
+                results.append(
+                    Document(
+                        page_content=doc_data["text"],
+                        metadata={
+                            **doc_data.get("metadata", {}),
+                            "bm25_score": scores[idx],
+                        },
+                    )
+                )
+
+        return results
+
+    def _rrf_fusion(
+        self,
+        vector_results: List[Document],
+        bm25_results: List[Document],
+        rrf_k: int = 60,
+    ) -> List[Document]:
+        """
+        Combine search results using Reciprocal Rank Fusion (RRF).
+
+        RRF formula: score = 1 / (k + rank)
+        Default k=60 works well in practice.
+
+        Args:
+            vector_results: Results from vector search
+            bm25_results: Results from BM25 search
+            rrf_k: RRF smoothing constant (default 60, do not confuse with retrieve_k)
+
+        Returns:
+            Combined and ranked Document objects
+        """
+        from collections import defaultdict
+
+        scores: defaultdict = defaultdict(float)
+        doc_map: dict = {}
+
+        # Score from vector results
+        for rank, doc in enumerate(vector_results):
+            # Use doc_id + chunk_idx as unique key (safe identifier)
+            doc_id = doc.metadata.get("doc_id", "")
+            chunk_idx = doc.metadata.get("chunk_idx", "")
+            doc_key = f"{doc_id}_{chunk_idx}"
+
+            # Fallback to content hash if metadata is missing
+            if not doc_id:
+                import hashlib
+                doc_key = hashlib.md5(doc.page_content.encode()).hexdigest()
+
+            scores[doc_key] += 1.0 / (rrf_k + rank)
+            doc_map[doc_key] = doc
+
+        # Score from BM25 results
+        for rank, doc in enumerate(bm25_results):
+            doc_id = doc.metadata.get("doc_id", "")
+            chunk_idx = doc.metadata.get("chunk_idx", "")
+            doc_key = f"{doc_id}_{chunk_idx}"
+
+            # Fallback to content hash if metadata is missing
+            if not doc_id:
+                import hashlib
+                doc_key = hashlib.md5(doc.page_content.encode()).hexdigest()
+
+            scores[doc_key] += 1.0 / (rrf_k + rank)
+            if doc_key not in doc_map:
+                doc_map[doc_key] = doc
+
+        # Sort by combined score
+        sorted_docs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+        # Return documents with RRF score
+        results = []
+        for doc_key, score in sorted_docs:
+            doc = doc_map[doc_key]
+            doc.metadata["rrf_score"] = score
+            results.append(doc)
+
+        return results
+
     def search_multi(
         self,
         kb_ids: List[str],
@@ -399,6 +661,7 @@ class DocumentIndexer:
         k_per_kb: int = 2,
         use_rerank: bool = False,
         top_n: int = 5,
+        use_hybrid: bool = True,
     ) -> List[Document]:
         """
         Search across multiple knowledge bases.
@@ -409,6 +672,7 @@ class DocumentIndexer:
             k_per_kb: Number of results per knowledge base
             use_rerank: Whether to use reranker
             top_n: Final number of results after reranking
+            use_hybrid: Whether to use hybrid retrieval (vector + BM25)
 
         Returns:
             List of relevant Document objects
@@ -420,7 +684,7 @@ class DocumentIndexer:
 
             for kb_id in kb_ids:
                 try:
-                    results = self.search(kb_id, query, k=k_per_kb * 2)
+                    results = self.search(kb_id, query, k=k_per_kb * 2, use_hybrid=use_hybrid)
                     for doc in results:
                         all_texts.append(doc.page_content)
                         all_docs.append(doc)
@@ -449,7 +713,7 @@ class DocumentIndexer:
         all_results = []
         for kb_id in kb_ids:
             try:
-                results = self.search(kb_id, query, k=k_per_kb)
+                results = self.search(kb_id, query, k=k_per_kb, use_hybrid=use_hybrid)
                 all_results.extend(results)
             except Exception:
                 continue
@@ -463,6 +727,7 @@ class DocumentIndexer:
         k_per_kb: int = 2,
         use_rerank: bool = True,
         top_n: int = 5,
+        use_hybrid: bool = True,
     ) -> str:
         """
         Search and return context as a formatted string.
@@ -473,11 +738,12 @@ class DocumentIndexer:
             k_per_kb: Number of results per knowledge base
             use_rerank: Whether to use reranker
             top_n: Max number of results
+            use_hybrid: Whether to use hybrid retrieval (vector + BM25)
 
         Returns:
             Formatted context string
         """
-        results = self.search_multi(kb_ids, query, k_per_kb, use_rerank, top_n)
+        results = self.search_multi(kb_ids, query, k_per_kb, use_rerank, top_n, use_hybrid)
 
         if not results:
             return ""
@@ -485,7 +751,8 @@ class DocumentIndexer:
         context_parts = []
         for i, doc in enumerate(results, 1):
             source = doc.metadata.get("doc_name", "Unknown")
-            score = doc.metadata.get("rerank_score")
+            # Show RRF score for hybrid, rerank score for reranking
+            score = doc.metadata.get("rerank_score") or doc.metadata.get("rrf_score") or doc.metadata.get("bm25_score")
             score_text = f" (score: {score:.2f})" if score else ""
             context_parts.append(f"[Source: {source}{score_text}]\n{doc.page_content}")
 
@@ -500,6 +767,11 @@ class DocumentIndexer:
         """
         Delete all chunks belonging to a document.
 
+        Deletes from:
+        - ChunkTracker
+        - ChromaDB (vector store)
+        - BM25 corpus and index (to prevent "ghost data" leaks)
+
         Args:
             kb_id: Knowledge base identifier
             doc_id: Document identifier
@@ -512,26 +784,72 @@ class DocumentIndexer:
             chunk_tracker = ChunkTracker(kb_id, str(self.persist_dir.parent / "knowledge"))
 
         # Remove from tracker first
-        chunks_removed = chunk_tracker.remove_doc_chunks(doc_id)
+        _ = chunk_tracker.remove_doc_chunks(doc_id)
 
         # Delete from ChromaDB using metadata filter
+        vector_deleted = 0
         try:
             vectorstore = self._get_vectorstore(kb_id)
             if vectorstore:
                 # Chroma supports delete by where filter
                 deleted = vectorstore.delete(where={"doc_id": doc_id})
                 # deleted is a dict with 'ids' key containing deleted IDs
-                return len(deleted.get("ids", [])) if deleted else 0
+                vector_deleted = len(deleted.get("ids", [])) if deleted else 0
         except Exception as e:
             print(f"Warning: Failed to delete vectors from ChromaDB: {e}")
 
-        return chunks_removed
+        # Delete from BM25 corpus and rebuild index
+        self._delete_from_bm25(kb_id, doc_id)
+
+        return vector_deleted
+
+    def _delete_from_bm25(self, kb_id: str, doc_id: str):
+        """
+        Delete a document's chunks from BM25 corpus and rebuild the index.
+
+        Args:
+            kb_id: Knowledge base identifier
+            doc_id: Document identifier to delete
+        """
+        bm25_corpus = self._load_bm25_corpus(kb_id)
+        if not bm25_corpus:
+            return
+
+        # Filter out chunks belonging to this document
+        original_count = len(bm25_corpus)
+        bm25_corpus = [
+            item for item in bm25_corpus
+            if item.get("metadata", {}).get("doc_id") != doc_id
+        ]
+
+        if len(bm25_corpus) < original_count:
+            # Check if corpus is empty after deletion (last document removed)
+            if len(bm25_corpus) == 0:
+                # Delete BM25 files instead of rebuilding with empty corpus
+                self._delete_bm25_index(kb_id)
+                return
+
+            # Save updated corpus
+            self._save_bm25_corpus(kb_id, bm25_corpus)
+
+            # Rebuild BM25 index
+            try:
+                from rank_bm25 import BM25Okapi
+                tokenized_corpus = [self._tokenize(doc["text"]) for doc in bm25_corpus]
+                bm25_index = BM25Okapi(tokenized_corpus)
+                self._save_bm25_index(kb_id, bm25_index)
+            except ImportError:
+                print("Warning: rank-bm25 not installed, BM25 retrieval disabled")
+            except Exception as e:
+                print(f"Warning: Failed to rebuild BM25 index: {e}")
 
     def delete_knowledge_base_vectors(self, kb_id: str) -> int:
         """
         Delete all vectors belonging to a knowledge base.
 
-        This deletes the entire ChromaDB collection for the KB.
+        This deletes:
+        - Entire ChromaDB collection for the KB
+        - BM25 corpus and index files
 
         Args:
             kb_id: Knowledge base identifier
@@ -546,10 +864,32 @@ class DocumentIndexer:
                 count = len(vectorstore.get()["ids"]) if vectorstore.get()["ids"] else 0
                 # Delete entire collection
                 vectorstore._client.delete_collection(name=vectorstore._collection.name)
+
+                # Delete BM25 files
+                self._delete_bm25_index(kb_id)
+
                 return count
         except Exception as e:
             print(f"Warning: Failed to delete knowledge base vectors: {e}")
         return 0
+
+    def _delete_bm25_index(self, kb_id: str):
+        """
+        Delete BM25 corpus and index files for a knowledge base.
+
+        Args:
+            kb_id: Knowledge base identifier
+        """
+        corpus_path = self.bm25_dir / f"kb_{kb_id}_corpus.json"
+        index_path = self.bm25_dir / f"kb_{kb_id}_bm25.pkl"
+
+        try:
+            if corpus_path.exists():
+                corpus_path.unlink()
+            if index_path.exists():
+                index_path.unlink()
+        except Exception as e:
+            print(f"Warning: Failed to delete BM25 files: {e}")
 
     def get_stats(self, kb_id: str) -> Dict:
         """

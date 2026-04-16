@@ -81,7 +81,7 @@ You have the ability to:
 3. Explain what you're doing before doing it
 4. You MUST use get_skill before executing skills.
 5. When using `npx skills` to download a skill, please ensure you are in the project directory (backend/).
-
+6. Prioritize using the content within the RAG Context to respond.
 
 Begin helping the user!
 """

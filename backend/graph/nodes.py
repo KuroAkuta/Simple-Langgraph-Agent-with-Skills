@@ -42,7 +42,15 @@ async def rag_retrieval_node(state: AgentState) -> Dict:
         if not last_user_msg:
             return {"rag_context": ""}
 
-        context = indexer.get_context_string(kb_ids, last_user_msg, k_per_kb=2, use_rerank=True, top_n=5)
+        # Use hybrid retrieval (vector + BM25) with reranking
+        context = indexer.get_context_string(
+            kb_ids,
+            last_user_msg,
+            k_per_kb=2,
+            use_rerank=True,
+            top_n=5,
+            use_hybrid=True,  # Enable hybrid retrieval
+        )
 
         return {"rag_context": context}
 
